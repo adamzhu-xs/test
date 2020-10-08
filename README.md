@@ -16,3 +16,7 @@ https://wiki.python.org/moin/ParallelProcessing
 http://numba.pydata.org/
 
 https://dask.org/
+
+
+https://github.com/ndas1971/PyQs
+
