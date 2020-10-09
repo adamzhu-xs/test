@@ -1,0 +1,214 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from __future__ import print_function, division\n",
+    "import numpy as np\n",
+    "import pandas as pd \n",
+    "import matplotlib.pyplot as plt \n",
+    "from pyspark import *                   #SparkContext,RDD,Broadcast,Accumulator,SparkConf,SparkFiles,StorageLevel,TaskContext\n",
+    "\n",
+    "from pyspark.sql import *               #SparkSession, DataFrame, Column, Row, GroupedData, DataFrameNaFunctions, DataFrameStatFunctions, Window\n",
+    "import pyspark.sql.functions as F\n",
+    "from pyspark.sql.types import * \n",
+    "\n",
+    "from pyspark.ml  import *               #Transformer, UnaryTransformer,Estimator,Model,Pipeline,PipelineModel\n",
+    "from pyspark.ml.feature import *        #Binarizer, BucketedRandomProjectionLSHE, BucketedRandomProjectionLSHModelE, Bucketizer, ChiSqSelectorE, ChiSqSelectorModelE, CountVectorizer, CountVectorizerModel, DCT, ElementwiseProduct, FeatureHasherE, HashingTF, IDF, IDFModel, ImputerE, ImputerModelE, IndexToString, MaxAbsScaler, MaxAbsScalerModel, MinHashLSHE, MinHashLSHModelE, MinMaxScaler, MinMaxScalerModel, NGram, Normalizer, OneHotEncoderD, OneHotEncoderEstimator, OneHotEncoderModel, PCA, PCAModel, PolynomialExpansion, QuantileDiscretizerE, RegexTokenizer, RFormulaE, RFormulaModelE, SQLTransformer, StandardScaler, StandardScalerModel, StopWordsRemover, StringIndexer, StringIndexerModel, Tokenizer, VectorAssembler, VectorIndexer, VectorIndexerModel, VectorSizeHintE, VectorSlicer, Word2Vec, Word2VecModel, , \n",
+    "from pyspark.ml.classification import * #LinearSVCE, LinearSVCModelE, LogisticRegression, LogisticRegressionModel, LogisticRegressionSummaryE, LogisticRegressionTrainingSummaryE, BinaryLogisticRegressionSummaryE, BinaryLogisticRegressionTrainingSummaryE, DecisionTreeClassifier, DecisionTreeClassificationModel, GBTClassifier, GBTClassificationModel, RandomForestClassifier, RandomForestClassificationModel, NaiveBayes, NaiveBayesModel, MultilayerPerceptronClassifier, MultilayerPerceptronClassificationModel, OneVsRestE, OneVsRestModelE, , \n",
+    "from pyspark.ml.clustering import *     #BisectingKMeans, BisectingKMeansModel, BisectingKMeansSummaryE, KMeans, KMeansModel, GaussianMixture, GaussianMixtureModel, GaussianMixtureSummaryE, LDA, LDAModel, LocalLDAModel, DistributedLDAModel, , \n",
+    "from pyspark.ml.linalg import *         #Vector, DenseVector, SparseVector, Vectors, Matrix, DenseMatrix, SparseMatrix, Matrices, , \n",
+    "from pyspark.ml.recommendation import * #ALS, ALSModel, , \n",
+    "from pyspark.ml.regression import *     #AFTSurvivalRegressionE, AFTSurvivalRegressionModelE, DecisionTreeRegressor, DecisionTreeRegressionModel, GBTRegressor, GBTRegressionModel, GeneralizedLinearRegressionE, GeneralizedLinearRegressionModelE, GeneralizedLinearRegressionSummaryE, GeneralizedLinearRegressionTrainingSummaryE, IsotonicRegression, IsotonicRegressionModel, LinearRegression, LinearRegressionModel, LinearRegressionSummaryE, LinearRegressionTrainingSummaryE, RandomForestRegressor, RandomForestRegressionModel, , \n",
+    "from pyspark.ml.stat import *           #moduleChiSquareTestE, CorrelationE, , \n",
+    "from pyspark.ml.tuning import *         #ParamGridBuilder, CrossValidator, CrossValidatorModel, TrainValidationSplitE, TrainValidationSplitModelE, , \n",
+    "from pyspark.ml.evaluation import *     #Evaluator, BinaryClassificationEvaluatorE, RegressionEvaluatorE, MulticlassClassificationEvaluatorE, ClusteringEvaluatorE, , \n",
+    "from pyspark.ml.fpm import *            #FPGrowthE, FPGrowthModelE, , \n",
+    "from pyspark.ml.util import *           #BaseReadWrite, DefaultParamsReadable, DefaultParamsReader, DefaultParamsWritable, DefaultParamsWriter, Identifiable, JavaMLReadable, JavaMLReader, JavaMLWritable, JavaMLWriter, JavaPredictionModel, MLReadable, MLReader, MLWritable, MLWriter, , , \n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "spark = SparkSession.builder.appName(\"basic\").getOrCreate()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from sklearn.datasets import *  \n",
+    "iris = load_iris()\n",
+    "df = pd.DataFrame(iris.data, columns=iris.feature_names)\n",
+    "df['label'] = iris.target\n",
+    "sdf = spark.createDataFrame(df)\n",
+    "sdf_b = sdf.filter(F.col('label').isin([0,1]))\n",
+    "#sdf_b.show()\n",
+    "\n",
+    "features = list(set(sdf_b.columns) - {'label'})\n",
+    "va = VectorAssembler(inputCols=features, outputCol=\"rawfeatures\")\n",
+    "\n",
+    "ms = MinMaxScaler(inputCol='rawfeatures', outputCol='scaledFeatures')\n",
+    "lr = LinearSVC(featuresCol='scaledFeatures', labelCol='label', predictionCol='prediction')\n",
+    "ovr = OneVsRest(featuresCol='scaledFeatures', labelCol='label', \n",
+    "                predictionCol='prediction',\n",
+    "                classifier=lr)\n",
+    "          \n",
+    "pipeline = Pipeline(stages=[va,ms,ovr])\n",
+    "\n",
+    "(trainData, testData) = sdf.randomSplit([.75,.25]) #train/test split ratio\n",
+    "model = pipeline.fit(trainData)\n",
+    "#regParam=0.0, numTopFeatures\n",
+    "ev = MulticlassClassificationEvaluator(predictionCol='prediction', \n",
+    "                                       labelCol='label', metricName='accuracy')\n",
+    "params = ParamGridBuilder()\\\n",
+    "         .addGrid(lr.regParam, [0.1,1.0,10.0])\\\n",
+    "         .build()                              \n",
+    "cv = CrossValidator(estimator=pipeline, \n",
+    "                    estimatorParamMaps=params, \n",
+    "                    evaluator=ev, \n",
+    "                    numFolds=3)                          \n",
+    "model = cv.fit(trainData)   \n",
+    "preds = model.transform(testData)\n",
+    "preds.select('prediction', 'label').show()\n",
+    "\n",
+    "print('Test accuracy', ev.evaluate(preds), \n",
+    "      'Train accuracy', ev.evaluate(model.transform(trainData)))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+----------+-----+--------------------+\n",
+      "|prediction|label|            features|\n",
+      "+----------+-----+--------------------+\n",
+      "|       9.0|    1|(64,[4,5,6,12,13,...|\n",
+      "|       1.0|    1|(64,[4,5,6,12,13,...|\n",
+      "|       1.0|    1|(64,[4,5,12,13,19...|\n",
+      "|       1.0|    1|(64,[4,5,6,11,12,...|\n",
+      "|       1.0|    1|(64,[4,5,6,12,13,...|\n",
+      "+----------+-----+--------------------+\n",
+      "only showing top 5 rows\n",
+      "\n",
+      "Test f1: 0.9394667838959562\n",
+      "train f1: 0.953740656027722\n"
+     ]
+    },
+    {
+     "data": {
+      "image/png": "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\n",
+      "text/plain": [
+       "<Figure size 432x288 with 1 Axes>"
+      ]
+     },
+     "metadata": {
+      "needs_background": "light"
+     },
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+----------+\n",
+      "|prediction|\n",
+      "+----------+\n",
+      "|       9.0|\n",
+      "+----------+\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "%run demo_code/19.5.spark_digits.py"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "#Tf-IDF \n",
+    "corpus = spark.createDataFrame([\n",
+    "    (0.0, \"Hi I heard about Spark\"),\n",
+    "    (0.0, \"I wish Java could use case classes\"),\n",
+    "    (1.0, \"Logistic regression models are neat\")\n",
+    "], [\"label\", \"sentence\"])"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+--------------------+--------------------+\n",
+      "|            features|            sentence|\n",
+      "+--------------------+--------------------+\n",
+      "|(20,[0,5,9,17],[0...|Hi I heard about ...|\n",
+      "|(20,[2,7,9,13,15]...|I wish Java could...|\n",
+      "|(20,[4,6,13,15,18...|Logistic regressi...|\n",
+      "+--------------------+--------------------+\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "tk = Tokenizer(inputCol='sentence', outputCol=\"words\")\n",
+    "tf = HashingTF(inputCol='words', outputCol=\"rawFeatures\", numFeatures=20)\n",
+    "idf = IDF(inputCol='rawFeatures', outputCol=\"features\")\n",
+    "words = tk.transform(corpus)\n",
+    "tff = tf.transform(words)\n",
+    "idfModel = idf.fit(tff)\n",
+    "data = idfModel.transform(tff)\n",
+    "data.select('features', 'sentence').show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "PySpark",
+   "language": "python",
+   "name": "pyspark"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.7.9"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
